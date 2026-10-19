@@ -38,6 +38,12 @@ flutter build web \
   --dart-define=SUPABASE_ANON_KEY=your-supabase-anon-key
 ```
 
+## Deploy to Vercel
+
+Add `SUPABASE_URL` and `SUPABASE_ANON_KEY` in the Vercel project's environment
+variables for Production and Preview. The Vercel build configuration downloads
+Flutter 3.47.7, builds the web app with those values, and serves `build/web`.
+
 For native builds, generate the platform runner files once if they are not
 present:
 

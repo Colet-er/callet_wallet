@@ -22,6 +22,10 @@ if [[ ! -x "$FLUTTER_EXECUTABLE" ]]; then
   tar -xf "$FLUTTER_ARCHIVE" -C /tmp
 fi
 
+# Flutter runs Git commands from its SDK checkout; Vercel extracts it with a
+# different owner, so mark this exact SDK directory as trusted for the build.
+git config --global --add safe.directory /tmp/flutter
+
 export PATH="/tmp/flutter/bin:$PATH"
 flutter --version
 flutter pub get

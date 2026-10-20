@@ -1625,14 +1625,16 @@ class _WalletCard extends StatelessWidget {
               ),
               const Spacer(),
               if (onConfigure != null)
-                IconButton(
-                  tooltip: 'Configure SMS matching',
-                  visualDensity: VisualDensity.compact,
-                  constraints: const BoxConstraints.tightFor(width: 34, height: 34),
-                  padding: EdgeInsets.zero,
+                TextButton.icon(
                   onPressed: onConfigure,
-                  icon: const Icon(Icons.sms_outlined, size: 17),
-                  color: _emerald,
+                  icon: const Icon(Icons.edit_outlined, size: 16),
+                  label: const Text('Edit'),
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 7),
+                    minimumSize: const Size(0, 34),
+                    foregroundColor: _emerald,
+                  ),
                 ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
@@ -3194,12 +3196,12 @@ class _WalletSmsMatchingSheetState extends State<WalletSmsMatchingSheet> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('SMS matching · ${widget.wallet.name}',
+              Text('Edit wallet · ${widget.wallet.name}',
                   style: const TextStyle(
                       color: _ink, fontSize: 20, fontWeight: FontWeight.w700)),
               const SizedBox(height: 8),
               const Text(
-                  'Only enter the last four digits. Never enter a full account number.',
+                  'Add the last four digits so Callet can match bank and e-wallet SMS to this wallet. For transfers, matching both wallets records a debit from the sending wallet and a credit to the receiving wallet. Never enter a full account number.',
                   style: TextStyle(color: _muted)),
               const SizedBox(height: 16),
               TextFormField(
@@ -3229,7 +3231,7 @@ class _WalletSmsMatchingSheetState extends State<WalletSmsMatchingSheet> {
               ),
               const SizedBox(height: 14),
               PrimaryButton(
-                  label: 'Save matching details',
+                  label: 'Save wallet',
                   busy: _busy,
                   onPressed: _save),
             ],

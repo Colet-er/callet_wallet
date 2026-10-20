@@ -3233,7 +3233,7 @@ class _WalletSmsMatchingSheetState extends State<WalletSmsMatchingSheet> {
                       color: _ink, fontSize: 20, fontWeight: FontWeight.w700)),
               const SizedBox(height: 8),
               const Text(
-                  'Add the last four digits so Callet can match bank and e-wallet SMS to this wallet. For transfers, matching both wallets records a debit from the sending wallet and a credit to the receiving wallet. Never enter a full account number.',
+                  'Enter the last four digits of this wallet’s account number. Never enter the full account number.',
                   style: TextStyle(color: _muted)),
               const SizedBox(height: 16),
               TextFormField(
@@ -3241,7 +3241,7 @@ class _WalletSmsMatchingSheetState extends State<WalletSmsMatchingSheet> {
                 keyboardType: TextInputType.number,
                 maxLength: 4,
                 decoration: const InputDecoration(
-                  labelText: 'Account or card last four digits',
+                  labelText: 'Account number (last 4 digits)',
                   hintText: 'e.g. 4138',
                 ),
                 validator: (value) {

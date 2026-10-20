@@ -25,21 +25,7 @@ type WalletRow = {
   name: string;
   type: string;
   account_last4: string | null;
-  sms_alias: string | null;
 };
-
-function normalizeMatchText(value: string): string {
-  return ` ${value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
-}
-
-function walletTextMatches(wallet: WalletRow, text: string): boolean {
-  if (wallet.type === 'cash') return false;
-  const haystack = normalizeMatchText(text);
-  const aliases = [wallet.name, ...(wallet.sms_alias ?? '').split(',')]
-    .map((value) => normalizeMatchText(value).trim())
-    .filter((value) => value.length > 1);
-  return aliases.some((alias) => haystack.includes(` ${alias} `));
-}
 
 function uniqueWallet(matches: WalletRow[]): WalletRow | null {
   const unique = [...new Map(matches.map((wallet) => [wallet.id, wallet])).values()];
@@ -108,27 +94,29 @@ function parseSmsMessage(message: string, wallets: WalletRow[]) {
     occurredOn = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
   }
 
-  const fromSegment = message.match(/\bfrom\b([\s\S]{0,70}?)(?:\bto\b|$)/i)?.[1] ?? '';
-  const toSegment = message.match(/\bto\b([\s\S]{0,70}?)(?:\bon\b|$)/i)?.[1] ?? '';
-  const fromLast4 = message.match(/\bfrom\b[\s\S]{0,50}?(?:\*{2,}|x{2,}|ending in\s*)(\d{4})\b/i)?.[1];
-  const toLast4 = message.match(/\bto\b[\s\S]{0,50}?(?:\*{2,}|x{2,}|ending in\s*)(\d{4})\b/i)?.[1];
+  const fromLast4 = message.match(/\bfrom\b[\s\S]{0,50}?(?:\*{2,}|x{2,}|ending(?:\s+in)?\s*)(\d{4})\b/i)?.[1];
+  const toLast4 = message.match(/\bto\b[\s\S]{0,50}?(?:\*{2,}|x{2,}|ending(?:\s+in)?\s*)(\d{4})\b/i)?.[1];
   const cardLast4 = card?.[1];
   const sourceById = uniqueWallet(walletsForLast4(wallets, fromLast4 ?? cardLast4));
   const destinationById = uniqueWallet(walletsForLast4(wallets, toLast4));
-  const sourceByText = uniqueWallet(wallets.filter((wallet) =>
-    walletTextMatches(wallet, fromSegment))) ??
-    uniqueWallet(wallets.filter((wallet) => walletTextMatches(wallet, message)));
-  const destinationByText = uniqueWallet(wallets.filter((wallet) =>
-    walletTextMatches(wallet, toSegment))) ??
-    uniqueWallet(wallets.filter((wallet) => walletTextMatches(wallet, message)));
-  const source = sourceById ?? sourceByText;
-  const destination = destinationById ?? destinationByText;
+  const allLast4s = [...message.matchAll(/(?:\*{2,}|x{2,}|ending(?:\s+in)?\s*)(\d{4})\b/gi)]
+    .map((match) => match[1]);
+  const matchedWallets = uniqueWallet(allLast4s.flatMap((last4) =>
+    walletsForLast4(wallets, last4)));
+  const source = sourceById ?? (direction === 'expense' ? matchedWallets : null);
+  const destination = destinationById ?? (direction === 'income' ? matchedWallets : null);
 
   if (fromLast4 && walletsForLast4(wallets, fromLast4).length > 1) {
     return { error: `More than one wallet uses account ending ${fromLast4}. Give each wallet a unique last four digits.` };
   }
   if (toLast4 && walletsForLast4(wallets, toLast4).length > 1) {
     return { error: `More than one wallet uses account ending ${toLast4}. Give each wallet a unique last four digits.` };
+  }
+
+  for (const last4 of allLast4s) {
+    if (walletsForLast4(wallets, last4).length > 1) {
+      return { error: `More than one wallet uses account ending ${last4}. Give each wallet a unique last four digits.` };
+    }
   }
 
   let wallet: WalletRow | null = null;
@@ -138,13 +126,15 @@ function parseSmsMessage(message: string, wallets: WalletRow[]) {
     type = 'transfer';
     wallet = source;
     transferTo = destination;
+  } else if (transfer && direction === 'expense') {
+    return { error: 'This transfer SMS must include the receiving wallet account ending in its last four digits. If it does not, record the transfer manually in Activity.' };
   } else if (direction === 'expense') {
-    wallet = source ?? uniqueWallet(wallets.filter((candidate) => walletTextMatches(candidate, message)));
+    wallet = source;
   } else {
-    wallet = destination ?? uniqueWallet(wallets.filter((candidate) => walletTextMatches(candidate, message)));
+    wallet = destination;
   }
   if (!wallet) {
-    return { error: 'Could not match this SMS to one wallet. Add its account last four digits or SMS match words to that wallet.' };
+    return { error: 'Could not match this SMS to a wallet. Add the matching account last four digits in the wallet settings and make sure the SMS includes them.' };
   }
 
   const description = type === 'transfer'
@@ -201,7 +191,7 @@ Deno.serve(async (request) => {
 
   const { data: walletRows, error: walletError } = await admin
     .from('wallets')
-    .select('id, name, type, account_last4, sms_alias')
+    .select('id, name, type, account_last4')
     .eq('user_id', tokenRow.user_id);
   if (walletError) return json(500, { error: 'Could not find your wallets.' });
 

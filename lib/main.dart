@@ -547,7 +547,6 @@ class MoneyWallet {
     required this.openingBalanceCents,
     required this.openingBalanceOn,
     this.accountLast4,
-    this.smsAlias = '',
   });
 
   final String id;
@@ -556,7 +555,6 @@ class MoneyWallet {
   final int openingBalanceCents;
   final DateTime openingBalanceOn;
   final String? accountLast4;
-  final String smsAlias;
 
   factory MoneyWallet.fromMap(Map<String, dynamic> row) => MoneyWallet(
         id: row['id'] as String,
@@ -565,7 +563,6 @@ class MoneyWallet {
         openingBalanceCents: (row['opening_balance_cents'] as num).toInt(),
         openingBalanceOn: DateTime.parse(row['opening_balance_on'] as String),
         accountLast4: row['account_last4'] as String?,
-        smsAlias: row['sms_alias'] as String? ?? '',
       );
 
   IconData get icon => switch (type) {
@@ -680,7 +677,7 @@ class _DashboardPageState extends State<DashboardPage>
     try {
       var walletRows = await _client
           .from('wallets')
-          .select('id, name, type, opening_balance_cents, opening_balance_on, account_last4, sms_alias')
+          .select('id, name, type, opening_balance_cents, opening_balance_on, account_last4')
           .order('created_at');
       if (walletRows.isEmpty) {
         await _client.from('wallets').insert({
@@ -692,7 +689,7 @@ class _DashboardPageState extends State<DashboardPage>
         });
         walletRows = await _client
             .from('wallets')
-            .select('id, name, type, opening_balance_cents, opening_balance_on, account_last4, sms_alias')
+            .select('id, name, type, opening_balance_cents, opening_balance_on, account_last4')
             .order('created_at');
       }
       final rows = await _client
@@ -3192,20 +3189,17 @@ class WalletSmsMatchingSheet extends StatefulWidget {
 class _WalletSmsMatchingSheetState extends State<WalletSmsMatchingSheet> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _last4;
-  late final TextEditingController _aliases;
   bool _busy = false;
 
   @override
   void initState() {
     super.initState();
     _last4 = TextEditingController(text: widget.wallet.accountLast4 ?? '');
-    _aliases = TextEditingController(text: widget.wallet.smsAlias);
   }
 
   @override
   void dispose() {
     _last4.dispose();
-    _aliases.dispose();
     super.dispose();
   }
 
@@ -3215,7 +3209,6 @@ class _WalletSmsMatchingSheetState extends State<WalletSmsMatchingSheet> {
     try {
       await Supabase.instance.client.from('wallets').update({
         'account_last4': _last4.text.trim().isEmpty ? null : _last4.text.trim(),
-        'sms_alias': _aliases.text.trim(),
       }).eq('id', widget.wallet.id);
       if (mounted) Navigator.of(context).pop(true);
     } catch (error) {
@@ -3257,16 +3250,6 @@ class _WalletSmsMatchingSheetState extends State<WalletSmsMatchingSheet> {
                       ? null
                       : 'Enter exactly four digits or leave blank.';
                 },
-              ),
-              const SizedBox(height: 8),
-              TextFormField(
-                controller: _aliases,
-                maxLength: 160,
-                decoration: const InputDecoration(
-                  labelText: 'SMS match words (optional)',
-                  hintText: 'e.g. My CBC, China Bank',
-                  helperText: 'Separate multiple phrases with commas.',
-                ),
               ),
               const SizedBox(height: 14),
               PrimaryButton(

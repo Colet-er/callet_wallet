@@ -140,12 +140,11 @@ AI service.
 ## iPhone bank SMS import
 
 On the Wallets section, select **Connect SMS Shortcut** and copy the token.
-Tap the SMS icon on each wallet card to set that wallet's account/card last four
-digits and optional SMS match words. Do not enter a full account number. For
-example, a CBC wallet can use last four `4138` and match words `My CBC`; a
-destination wallet can use last four `0890` or the phrase shown for that account
-in the alert. The token can be rotated by creating another one or revoked from
-the same screen.
+Tap **Edit** on each bank or e-wallet card and enter that wallet's account/card
+last four digits. Do not enter a full account number. For transfers between two
+of your wallets, the SMS must include both account endings to match the source
+and destination. The token can be rotated by creating another one or revoked
+from the same screen.
 
 In the iPhone Shortcut automation, add **Get Contents of URL** after the
 message trigger:

@@ -118,5 +118,6 @@ Weekly limit reminders appear in the in-app Reminders panel while Callet is
 open.
 
 The chat helper answers supported questions from the data already loaded in
-Callet (balances, loans, payment dates, weekly spending, and recent activity).
-It does not send financial data to an external AI service.
+Callet, including each wallet's balance and transaction descriptions, loans,
+payment dates, weekly spending, and recent activity. It does not send financial
+data to an external AI service.

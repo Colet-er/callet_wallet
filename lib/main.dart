@@ -985,6 +985,7 @@ class _DashboardPageState extends State<DashboardPage> {
       backgroundColor: _canvas,
       constraints: const BoxConstraints(maxWidth: 560),
       builder: (_) => ChatAssistantSheet(
+        wallets: _wallets,
         walletBalanceCents: _wallets.fold<int>(
           0,
           (sum, wallet) => sum + wallet.balanceFor(_transactions),
@@ -2415,6 +2416,7 @@ class _ChatMessage {
 
 class ChatAssistantSheet extends StatefulWidget {
   const ChatAssistantSheet({
+    required this.wallets,
     required this.walletBalanceCents,
     required this.loans,
     required this.transactions,
@@ -2423,6 +2425,7 @@ class ChatAssistantSheet extends StatefulWidget {
     super.key,
   });
 
+  final List<MoneyWallet> wallets;
   final int walletBalanceCents;
   final List<PersonalLoan> loans;
   final List<LedgerTransaction> transactions;
@@ -2438,7 +2441,7 @@ class _ChatAssistantSheetState extends State<ChatAssistantSheet> {
   final _scrollController = ScrollController();
   final List<_ChatMessage> _messages = [
     const _ChatMessage(
-      'Hi! Ask me about your wallet balance, weekly spending, loans, or upcoming payments. I use the data saved in Callet.',
+      'Hi! Ask me about any bank or wallet balance, its activity descriptions, weekly spending, loans, or upcoming payments. I use the data saved in Callet.',
       fromUser: false,
     ),
   ];
@@ -2471,6 +2474,8 @@ class _ChatAssistantSheetState extends State<ChatAssistantSheet> {
 
   String _answer(String question) {
     final text = question.toLowerCase();
+    final walletAnswer = _answerWalletQuestion(text);
+    if (walletAnswer != null) return walletAnswer;
     if (text.contains('monthly') || text.contains('installment')) {
       final monthlyTotal = widget.loans
           .where((loan) => loan.balanceCents > 0)
@@ -2513,7 +2518,104 @@ class _ChatAssistantSheetState extends State<ChatAssistantSheet> {
       final latest = widget.transactions.first;
       return 'Your latest saved activity is ${latest.description}, ${_php.format(latest.amountCents / 100)} on ${DateFormat('MMM d, yyyy').format(latest.occurredOn)}.';
     }
-    return 'I can help with your wallet balance, weekly expenses, loans, and payment dates. Try asking “How much did I spend this week?”';
+    return 'I can help with bank and wallet balances and activity, weekly expenses, loans, and payment dates. Try asking “Show all my wallet activity descriptions.”';
+  }
+
+  String? _answerWalletQuestion(String text) {
+    final asksWallet = text.contains('wallet') ||
+        text.contains('bank') ||
+        text.contains('account') ||
+        text.contains('gcash');
+    if (!asksWallet) return null;
+    if (widget.wallets.isEmpty) {
+      return 'You do not have any wallets saved in Callet yet.';
+    }
+
+    final asksForDetails = text.contains('all') ||
+        text.contains('list') ||
+        text.contains('description') ||
+        text.contains('activity') ||
+        text.contains('transaction') ||
+        text.contains('account') ||
+        text.contains('bank') ||
+        text.contains('banks') ||
+        text.contains('gcash') ||
+        (text.contains('wallet') && !text.contains('balance'));
+
+    MoneyWallet? namedWallet;
+    for (final wallet in widget.wallets) {
+      final name = wallet.name.trim().toLowerCase();
+      final isGenericName = const {
+        'bank',
+        'gcash',
+        'cash',
+        'wallet',
+        'account',
+      }.contains(name);
+      if (name.isNotEmpty && !isGenericName && text.contains(name)) {
+        namedWallet = wallet;
+        break;
+      }
+    }
+    if (namedWallet != null) {
+      return _walletSummary(
+        namedWallet,
+        includeAllActivity: text.contains('all'),
+      );
+    }
+    if (!asksForDetails) return null;
+
+    final types = <String>{
+      if (text.contains('bank')) 'bank',
+      if (text.contains('gcash')) 'gcash',
+    };
+    final matchingWallets = widget.wallets
+        .where((wallet) => types.isEmpty || types.contains(wallet.type))
+        .toList(growable: false);
+    if (matchingWallets.isEmpty) {
+      return types.contains('bank') && !types.contains('gcash')
+          ? 'You do not have any bank wallets saved in Callet yet.'
+          : types.contains('gcash') && !types.contains('bank')
+              ? 'You do not have any GCash wallets saved in Callet yet.'
+              : 'You do not have any matching wallets saved in Callet yet.';
+    }
+
+    return matchingWallets
+        .map((wallet) => _walletSummary(
+              wallet,
+              includeAllActivity: text.contains('all'),
+            ))
+        .join('\n\n');
+  }
+
+  String _walletSummary(
+    MoneyWallet wallet, {
+    required bool includeAllActivity,
+  }) {
+    final balance = _php.format(wallet.balanceFor(widget.transactions) / 100);
+    final activity = widget.transactions
+        .where((transaction) => transaction.walletId == wallet.id)
+        .toList()
+      ..sort((a, b) => b.occurredOn.compareTo(a.occurredOn));
+    if (activity.isEmpty) {
+      return '${wallet.name} (${wallet.typeLabel}) has a balance of $balance and no saved activity yet.';
+    }
+
+    final shownActivity = includeAllActivity ? activity : activity.take(5);
+    final descriptions = shownActivity.map((transaction) {
+      final kind = transaction.type == 'income' ? 'Income' : 'Expense';
+      final category = transaction.category.isEmpty
+          ? ''
+          : ' · ${transaction.category}';
+      return '$kind: ${transaction.description}$category, '
+          '${_php.format(transaction.amountCents / 100)} on '
+          '${DateFormat('MMM d, yyyy').format(transaction.occurredOn)}';
+    }).join('; ');
+    final suffix = activity.length > 5 && !includeAllActivity
+        ? ' Showing the 5 most recent of ${activity.length} activities.'
+        : '';
+    return '${wallet.name} (${wallet.typeLabel}) has a balance of $balance. '
+        'Activity descriptions: $descriptions.$suffix';
   }
 
   @override

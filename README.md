@@ -2,8 +2,9 @@
 
 Callet is a personal finance app built with Flutter and Supabase. The same
 Dart application targets web, iOS, and Android and includes email
-authentication, a finance dashboard, and an account-scoped transaction ledger.
-PostgreSQL row-level security protects each user's wallets and transactions.
+authentication, a finance dashboard, an account-scoped transaction ledger, and
+loan tracking. PostgreSQL row-level security protects each user's wallets,
+transactions, and loans.
 
 ## Set up Supabase
 
@@ -12,8 +13,12 @@ PostgreSQL row-level security protects each user's wallets and transactions.
 2. Run `supabase/migrations/202610190002_add_wallets.sql` in the Supabase SQL
    editor. This adds GCash, bank, and cash wallets and assigns existing
    transactions to a starting wallet.
-3. Enable email/password authentication in Supabase Auth.
-4. Install the Flutter SDK and fetch dependencies:
+3. Run `supabase/migrations/202610200001_add_loans.sql` in the Supabase SQL
+   editor. This adds account-scoped loan tracking with row-level security.
+4. Run `supabase/migrations/202610200002_add_loan_terms_and_budget.sql` in the
+   Supabase SQL editor. This adds loan repayment terms and weekly expense limits.
+5. Enable email/password authentication in Supabase Auth.
+6. Install the Flutter SDK and fetch dependencies:
 
    ```sh
    flutter pub get
@@ -51,6 +56,67 @@ present:
 flutter create --platforms=android,ios .
 ```
 
+## Phone notifications
+
+Tap **Reminders → Enable phone notifications** in the installed Android or
+iPhone app and allow the system permission. Callet then schedules a local
+notification at 9 AM, seven days before each active loan payment. It uses the
+phone's default notification sound and display style. The phone stores the
+scheduled reminder, so Callet does not need to be open when it fires. The web
+build continues to show reminders inside Callet.
+
+The Android and iOS runner folders are not checked into this project. After
+generating them, apply the following platform setup before building:
+
+- **Android:** In `android/app/build.gradle` (or `.kts`), enable core library
+  desugaring, set Java compatibility to 11, set `multiDexEnabled` to `true`,
+  add `com.android.tools:desugar_jdk_libs:2.1.4`, and use Android Gradle Plugin
+  8.6.0 or newer with `compileSdk` 35 or newer. In
+  `android/app/src/main/AndroidManifest.xml`, add this permission under
+  `<manifest>`:
+
+  ```xml
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+  ```
+
+  Add these receivers under `<application>` so scheduled reminders can be
+  restored after a reboot:
+
+  ```xml
+  <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
+  <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
+      <intent-filter>
+          <action android:name="android.intent.action.BOOT_COMPLETED" />
+          <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+          <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+          <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+      </intent-filter>
+  </receiver>
+  ```
+
+  The notification plugin adds the notification and vibration permissions.
+  Callet uses inexact scheduling, so it does not request exact alarm access.
+- **iOS:** In `ios/Runner/AppDelegate.swift`, set
+  `UNUserNotificationCenter.current().delegate = self as? UNUserNotificationCenterDelegate`
+  in the application launch method. The app requests alert, sound, and badge
+  permission when the user enables notifications.
+
 Amounts are displayed in Philippine pesos and stored as integer centavos.
 The Supabase anon key is intended to be public; never include a service-role
 key in a client app.
+
+## Loans, reminders, and weekly limit
+
+Loan records include term length, annual interest rate, scheduled monthly
+payment, and next due date. Callet shows a reminder exactly seven days before
+each loan payment, including its scheduled amount, in the in-app Reminders
+panel. The Loans section totals monthly payments across active loans and can
+estimate a fixed monthly payment from principal, APR, and term. Weekly expense
+limits count Monday
+through Sunday and alert in the app when spending reaches 80% of the limit.
+Weekly limit reminders appear in the in-app Reminders panel while Callet is
+open.
+
+The chat helper answers supported questions from the data already loaded in
+Callet (balances, loans, payment dates, weekly spending, and recent activity).
+It does not send financial data to an external AI service.

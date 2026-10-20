@@ -1,0 +1,2 @@
+[functions.sms-import]
+verify_jwt = false

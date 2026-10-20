@@ -1,0 +1,9 @@
+{
+  "name": "Callet",
+  "short_name": "Callet",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0B120E",
+  "theme_color": "#0B120E",
+  "description": "A calmer view of your everyday money."
+}

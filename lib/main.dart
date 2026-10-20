@@ -2441,7 +2441,7 @@ class _ChatAssistantSheetState extends State<ChatAssistantSheet> {
   final _scrollController = ScrollController();
   final List<_ChatMessage> _messages = [
     const _ChatMessage(
-      'Hi! Ask me about any bank or wallet balance, its activity descriptions, weekly spending, loans, or upcoming payments. I use the data saved in Callet.',
+      'Hi! Ask me about your saved Callet data: wallets, banks, activity, loans, and weekly spending. I can also show a full finance summary.',
       fromUser: false,
     ),
   ];
@@ -2474,6 +2474,8 @@ class _ChatAssistantSheetState extends State<ChatAssistantSheet> {
 
   String _answer(String question) {
     final text = question.toLowerCase();
+    final allDataAnswer = _answerAllDataQuestion(text);
+    if (allDataAnswer != null) return allDataAnswer;
     final walletAnswer = _answerWalletQuestion(text);
     if (walletAnswer != null) return walletAnswer;
     if (text.contains('monthly') || text.contains('installment')) {
@@ -2486,6 +2488,12 @@ class _ChatAssistantSheetState extends State<ChatAssistantSheet> {
       return 'Your tracked wallet balance is ${_php.format(widget.walletBalanceCents / 100)}.';
     }
     if (text.contains('loan') || text.contains('debt')) {
+      if (text.contains('all') ||
+          text.contains('list') ||
+          text.contains('detail') ||
+          text.contains('term')) {
+        return _allLoanReport();
+      }
       final total = widget.loans.fold<int>(
           0, (sum, loan) => sum + loan.balanceCents);
       final next = widget.loans
@@ -2513,16 +2521,140 @@ class _ChatAssistantSheetState extends State<ChatAssistantSheet> {
       final remaining = limit - widget.weeklySpentCents;
       return 'This week you have spent ${_php.format(widget.weeklySpentCents / 100)} of ${_php.format(limit / 100)}. ${remaining >= 0 ? '${_php.format(remaining / 100)} remains.' : 'You are ${_php.format(-remaining / 100)} over the limit.'}';
     }
+    final asksForActivityHistory =
+        (text.contains('all') || text.contains('history') || text.contains('list')) &&
+            (text.contains('activity') ||
+                text.contains('transaction') ||
+                text.contains('description'));
+    if (asksForActivityHistory) return _allActivityReport();
     if (text.contains('recent') || text.contains('activity') || text.contains('transaction')) {
       if (widget.transactions.isEmpty) return 'There are no transactions saved yet.';
       final latest = widget.transactions.first;
       return 'Your latest saved activity is ${latest.description}, ${_php.format(latest.amountCents / 100)} on ${DateFormat('MMM d, yyyy').format(latest.occurredOn)}.';
     }
-    return 'I can help with bank and wallet balances and activity, weekly expenses, loans, and payment dates. Try asking “Show all my wallet activity descriptions.”';
+    return 'I can answer from your saved wallets, activity, loans, and weekly limit. Try “Show my full finance summary” or “List all transactions.”';
+  }
+
+  String? _answerAllDataQuestion(String text) {
+    final asksForFullSummary = text.contains('everything') ||
+        text.contains('all data') ||
+        text.contains('all records') ||
+        text.contains('system data') ||
+        text.contains('full summary') ||
+        text.contains('full report') ||
+        (text.contains('overview') &&
+            (text.contains('my') ||
+                text.contains('finance') ||
+                text.contains('account')));
+    return asksForFullSummary ? _fullDataReport() : null;
+  }
+
+  String _fullDataReport() {
+    final sections = <String>['Your saved Callet finance data:'];
+
+    sections.add('Wallets and banks:');
+    if (widget.wallets.isEmpty) {
+      sections.add('No wallets are saved.');
+    } else {
+      for (final wallet in widget.wallets) {
+        final balance = _php.format(wallet.balanceFor(widget.transactions) / 100);
+        final openingBalance =
+            _php.format(wallet.openingBalanceCents / 100);
+        sections.add(
+          '- ${wallet.name} (${wallet.typeLabel}): current balance $balance; '
+          'opening balance $openingBalance on '
+          '${DateFormat('MMM d, yyyy').format(wallet.openingBalanceOn)}',
+        );
+      }
+    }
+
+    sections.add(_allLoanReport());
+
+    final incomeCents = widget.transactions
+        .where((transaction) => transaction.type == 'income')
+        .fold<int>(0, (sum, transaction) => sum + transaction.amountCents);
+    final expenseCents = widget.transactions
+        .where((transaction) => transaction.type == 'expense')
+        .fold<int>(0, (sum, transaction) => sum + transaction.amountCents);
+    sections.add(
+      'Activity totals: ${widget.transactions.length} transactions, '
+      '${_php.format(incomeCents / 100)} income, '
+      '${_php.format(expenseCents / 100)} expenses.',
+    );
+    sections.add(_weeklyBudgetSummary());
+    sections.add(_allActivityReport());
+    return sections.join('\n');
+  }
+
+  String _allLoanReport() {
+    if (widget.loans.isEmpty) return 'Loans: no loans are saved.';
+    final lines = widget.loans.map((loan) {
+      final dueDate = loan.dueOn == null
+          ? 'next due date not set'
+          : 'next due ${DateFormat('MMM d, yyyy').format(loan.dueOn!)}';
+      final monthlyPayment = loan.monthlyPaymentCents == null
+          ? 'monthly payment not set'
+          : '${_php.format(loan.monthlyPaymentCents! / 100)} per month';
+      final term = loan.termMonths == null
+          ? 'term not set'
+          : '${loan.termMonths} month term';
+      return '- ${loan.name} from ${loan.lender}: balance '
+          '${_php.format(loan.balanceCents / 100)} of '
+          '${_php.format(loan.originalAmountCents / 100)}, $monthlyPayment, '
+          '$dueDate, $term, APR '
+          '${(loan.annualInterestBps / 100).toStringAsFixed(2)}%';
+    });
+    return 'Loans:\n${lines.join('\n')}';
+  }
+
+  String _weeklyBudgetSummary() {
+    final limit = widget.weeklyLimitCents;
+    if (limit == null || limit <= 0) {
+      return 'Weekly limit: not set. Spending this week: '
+          '${_php.format(widget.weeklySpentCents / 100)}.';
+    }
+    final remaining = limit - widget.weeklySpentCents;
+    return 'Weekly spending: ${_php.format(widget.weeklySpentCents / 100)} '
+        'of ${_php.format(limit / 100)}. '
+        '${remaining >= 0 ? '${_php.format(remaining / 100)} remaining.' : '${_php.format(-remaining / 100)} over the limit.'}';
+  }
+
+  String _allActivityReport() {
+    if (widget.transactions.isEmpty) return 'No transactions are saved.';
+    final transactions = widget.transactions.toList()
+      ..sort((a, b) => b.occurredOn.compareTo(a.occurredOn));
+    final lines = transactions.map((transaction) {
+      final wallet = _walletForTransaction(transaction.walletId);
+      final walletLabel = wallet == null ? '' : ' · ${wallet.name}';
+      final kind = transaction.type == 'income' ? 'Income' : 'Expense';
+      return '- ${DateFormat('MMM d, yyyy').format(transaction.occurredOn)} · '
+          '$kind · ${transaction.description} · ${transaction.category} · '
+          '${_php.format(transaction.amountCents / 100)}$walletLabel';
+    });
+    return 'Saved activity:\n${lines.join('\n')}';
+  }
+
+  MoneyWallet? _walletForTransaction(String walletId) {
+    for (final wallet in widget.wallets) {
+      if (wallet.id == walletId) return wallet;
+    }
+    return null;
   }
 
   String? _answerWalletQuestion(String text) {
-    final asksWallet = text.contains('wallet') ||
+    final mentionsWalletName = widget.wallets.any((wallet) {
+      final name = wallet.name.trim().toLowerCase();
+      final isGenericName = const {
+        'bank',
+        'gcash',
+        'cash',
+        'wallet',
+        'account',
+      }.contains(name);
+      return name.isNotEmpty && !isGenericName && text.contains(name);
+    });
+    final asksWallet = mentionsWalletName ||
+        text.contains('wallet') ||
         text.contains('bank') ||
         text.contains('account') ||
         text.contains('gcash');

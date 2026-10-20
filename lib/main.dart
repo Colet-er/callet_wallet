@@ -806,6 +806,21 @@ class _DashboardPageState extends State<DashboardPage>
     if (saved == true) await _loadTransactions();
   }
 
+  Future<void> _addWalletActivity(MoneyWallet wallet) async {
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: _canvas,
+      constraints: const BoxConstraints(maxWidth: 560),
+      builder: (_) => AddTransactionSheet(
+        wallets: _wallets,
+        initialWalletId: wallet.id,
+      ),
+    );
+    if (saved == true) await _loadData();
+  }
+
   Future<void> _addWallet() async {
     final saved = await showModalBottomSheet<bool>(
       context: context,
@@ -1417,7 +1432,7 @@ class _DashboardPageState extends State<DashboardPage>
           ],
         ),
         const Text(
-          'Set each wallet’s SMS match details so incoming alerts can be assigned to the right wallet.',
+          'Edit a bank or e-wallet to add its SMS match details. Add cash income or expenses directly from the cash wallet card.',
           style: TextStyle(color: _muted, fontSize: 12),
         ),
         const SizedBox(height: 18),
@@ -1433,6 +1448,7 @@ class _DashboardPageState extends State<DashboardPage>
             wallets: _wallets,
             transactions: _transactions,
             onConfigure: _configureWalletSms,
+            onCashActivity: _addWalletActivity,
           ),
       ];
 
@@ -1550,12 +1566,14 @@ class _WalletCards extends StatelessWidget {
     required this.transactions,
     this.compact = false,
     this.onConfigure,
+    this.onCashActivity,
   });
 
   final List<MoneyWallet> wallets;
   final List<LedgerTransaction> transactions;
   final bool compact;
   final ValueChanged<MoneyWallet>? onConfigure;
+  final ValueChanged<MoneyWallet>? onCashActivity;
 
   @override
   Widget build(BuildContext context) {
@@ -1579,9 +1597,12 @@ class _WalletCards extends StatelessWidget {
                   child: _WalletCard(
                     wallet: wallet,
                     balance: wallet.balanceFor(transactions),
-                    onConfigure: onConfigure == null
+                    onConfigure: onConfigure == null || wallet.type == 'cash'
                         ? null
                         : () => onConfigure!(wallet),
+                    onCashActivity: wallet.type == 'cash' && onCashActivity != null
+                        ? () => onCashActivity!(wallet)
+                        : null,
                   ),
                 ))
             .toList(),
@@ -1595,11 +1616,13 @@ class _WalletCard extends StatelessWidget {
     required this.wallet,
     required this.balance,
     this.onConfigure,
+    this.onCashActivity,
   });
 
   final MoneyWallet wallet;
   final int balance;
   final VoidCallback? onConfigure;
+  final VoidCallback? onCashActivity;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -1662,6 +1685,22 @@ class _WalletCard extends StatelessWidget {
                   style: const TextStyle(
                       color: _ink, fontSize: 21, fontWeight: FontWeight.w700)),
             ),
+            if (onCashActivity != null) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: onCashActivity,
+                  icon: const Icon(Icons.add_circle_outline, size: 16),
+                  label: const Text('Add cash activity'),
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    foregroundColor: _emerald,
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       );
@@ -3241,9 +3280,14 @@ class _WalletSmsMatchingSheetState extends State<WalletSmsMatchingSheet> {
 }
 
 class AddTransactionSheet extends StatefulWidget {
-  const AddTransactionSheet({required this.wallets, super.key});
+  const AddTransactionSheet({
+    required this.wallets,
+    this.initialWalletId,
+    super.key,
+  });
 
   final List<MoneyWallet> wallets;
+  final String? initialWalletId;
 
   @override
   State<AddTransactionSheet> createState() => _AddTransactionSheetState();
@@ -3271,6 +3315,12 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
   String? _transferToWalletId;
   DateTime _date = DateTime.now();
   bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _walletId = widget.initialWalletId;
+  }
 
   @override
   void dispose() {

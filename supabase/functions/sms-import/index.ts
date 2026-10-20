@@ -23,6 +23,7 @@ async function sha256(value: string): Promise<string> {
 type WalletRow = {
   id: string;
   name: string;
+  type: string;
   account_last4: string | null;
   sms_alias: string | null;
 };
@@ -32,6 +33,7 @@ function normalizeMatchText(value: string): string {
 }
 
 function walletTextMatches(wallet: WalletRow, text: string): boolean {
+  if (wallet.type === 'cash') return false;
   const haystack = normalizeMatchText(text);
   const aliases = [wallet.name, ...(wallet.sms_alias ?? '').split(',')]
     .map((value) => normalizeMatchText(value).trim())
@@ -46,7 +48,7 @@ function uniqueWallet(matches: WalletRow[]): WalletRow | null {
 
 function walletsForLast4(wallets: WalletRow[], last4: string | undefined): WalletRow[] {
   if (!last4) return [];
-  return wallets.filter((wallet) => wallet.account_last4 === last4);
+  return wallets.filter((wallet) => wallet.type !== 'cash' && wallet.account_last4 === last4);
 }
 
 function parseSmsMessage(message: string, wallets: WalletRow[]) {
@@ -199,11 +201,14 @@ Deno.serve(async (request) => {
 
   const { data: walletRows, error: walletError } = await admin
     .from('wallets')
-    .select('id, name, account_last4, sms_alias')
+    .select('id, name, type, account_last4, sms_alias')
     .eq('user_id', tokenRow.user_id);
   if (walletError) return json(500, { error: 'Could not find your wallets.' });
 
-  const parsed = parseSmsMessage(body.message, (walletRows ?? []) as WalletRow[]);
+  const parsed = parseSmsMessage(
+    body.message,
+    ((walletRows ?? []) as WalletRow[]).filter((wallet) => wallet.type !== 'cash'),
+  );
   if ('error' in parsed) {
     return json(422, { error: parsed.error });
   }

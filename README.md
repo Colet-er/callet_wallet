@@ -151,7 +151,8 @@ message trigger:
 - Request body: JSON with `message` set to the SMS text variable from the
   automation trigger
 
-The current importer recognizes the CBC card purchase format, records it as an
-expense, and ignores duplicate copies of the same SMS. Review each imported
-entry in Activity. Other bank or GCash message formats need their own parser
-before they can be imported automatically.
+The importer classifies messages with clear income terms (such as credited,
+received, or deposit) or expense terms (such as debited, purchase, withdrawn,
+or sent). It recognizes CBC or GCash when named in the SMS, skips ambiguous
+messages and duplicate copies, and adds supported imports to Activity. Bank
+messages that use other wording may need their parser expanded.

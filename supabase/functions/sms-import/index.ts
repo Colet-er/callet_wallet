@@ -20,34 +20,79 @@ async function sha256(value: string): Promise<string> {
     .join('');
 }
 
-function parseCbcCardAlert(message: string) {
+function parseSmsMessage(message: string) {
   const card = message.match(
     /Thank you for using\s+CBC\s+Card\s+ending in\s+(\d{4})\s*:/i,
   );
-  const amount = message.match(/\bPHP\s*([\d,]+(?:\.\d{1,2})?)\b/i);
-  const date = message.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})\b/);
+  const amount = message.match(/(?:\bPHP\s*|₱\s*)([\d,]+(?:\.\d{1,2})?)\b/i);
+  const date = message.match(
+    /\b(\d{4})-(\d{1,2})-(\d{1,2})\b|\b(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})\b/,
+  );
+  const namedDate = message.match(
+    /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i,
+  );
+  const saysIncome = /\b(credited|credit(?:ed)? to|received|deposit(?:ed)?|cash[ -]?in|refund(?:ed)?)\b/i.test(message);
+  const saysExpense =
+    /\b(debited|deducted|withdraw(?:n|al)?|purchase|paid|payment|sent|cash[ -]?out)\b/i.test(message) ||
+    (/\btransfer(?:red)?\b/i.test(message) && /\bfrom\b/i.test(message) && !saysIncome);
 
-  if (!card || !amount || !date) return null;
+  if (!amount) return { error: 'Could not find a PHP amount in this SMS.' };
+  if (saysIncome === saysExpense && !card) {
+    return { error: 'Could not tell whether this SMS is income or an expense.' };
+  }
 
+  const type = card || saysExpense ? 'expense' : 'income';
   const majorAmount = Number(amount[1].replaceAll(',', ''));
   const amountCents = Math.round(majorAmount * 100);
-  if (!Number.isSafeInteger(amountCents) || amountCents <= 0) return null;
+  if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
+    return { error: 'The amount in this SMS is invalid.' };
+  }
 
-  const year = Number(date[3].length === 2 ? `20${date[3]}` : date[3]);
-  const month = Number(date[1]);
-  const day = Number(date[2]);
-  const occurred = new Date(Date.UTC(year, month - 1, day));
-  if (
-    occurred.getUTCFullYear() !== year ||
-    occurred.getUTCMonth() !== month - 1 ||
-    occurred.getUTCDate() !== day
-  ) return null;
+  let occurredOn: string;
+  if (date || namedDate) {
+    const monthNames = [
+      'january', 'february', 'march', 'april', 'may', 'june',
+      'july', 'august', 'september', 'october', 'november', 'december',
+    ];
+    const year = Number(namedDate
+      ? namedDate[3]
+      : date![1]
+        ? date![1]
+        : date![6].length === 2
+          ? `20${date![6]}`
+          : date![6]);
+    const month = Number(namedDate
+      ? monthNames.indexOf(namedDate[1].toLowerCase()) + 1
+      : date![1]
+        ? date![2]
+        : date![4]);
+    const day = Number(namedDate ? namedDate[2] : date![1] ? date![3] : date![5]);
+    const occurred = new Date(Date.UTC(year, month - 1, day));
+    if (
+      occurred.getUTCFullYear() !== year ||
+      occurred.getUTCMonth() !== month - 1 ||
+      occurred.getUTCDate() !== day
+    ) return { error: 'The date in this SMS is invalid.' };
+    occurredOn = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  } else {
+    occurredOn = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  }
 
+  const isCbc = /\b(?:CBC|China Bank|China Banking Corporation)\b/i.test(message);
+  const isGcash = /\bGCash\b/i.test(message);
+  if (Number(isCbc) + Number(isGcash) !== 1) {
+    return { error: 'Could not identify a single CBC or GCash wallet from this SMS.' };
+  }
+
+  const brand = isCbc ? 'CBC' : 'GCash';
+  const cardDescription = card ? `CBC card ••••${card[1]}` : `${brand} SMS ${type}`;
   return {
-    last4: card[1],
+    type,
     amountCents,
-    occurredOn: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
-    description: `CBC card ••••${card[1]}`,
+    occurredOn,
+    description: cardDescription,
+    category: card ? 'Card purchase' : type === 'income' ? 'Income' : 'Expense',
+    walletMatch: isCbc ? ['cbc', 'china bank'] : ['gcash'],
   };
 }
 
@@ -70,11 +115,9 @@ Deno.serve(async (request) => {
     return json(400, { error: 'Include the SMS text in a message field (maximum 1500 characters).' });
   }
 
-  const parsed = parseCbcCardAlert(body.message);
-  if (!parsed) {
-    return json(422, {
-      error: 'This SMS does not match the supported CBC card purchase format.',
-    });
+  const parsed = parseSmsMessage(body.message);
+  if ('error' in parsed) {
+    return json(422, { error: parsed.error });
   }
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
@@ -99,24 +142,24 @@ Deno.serve(async (request) => {
     .eq('user_id', tokenRow.user_id);
   if (walletError) return json(500, { error: 'Could not find your wallets.' });
 
-  const cbcWallets = (walletRows ?? []).filter((wallet) => {
+  const matchingWallets = (walletRows ?? []).filter((wallet) => {
     const name = String(wallet.name).toLowerCase();
-    return name.includes('cbc') || name.includes('china bank');
+    return parsed.walletMatch.some((match) => name.includes(match));
   });
-  if (cbcWallets.length === 0) {
-    return json(409, { error: 'Add a wallet named CBC or China Bank before importing this alert.' });
+  if (matchingWallets.length === 0) {
+    return json(409, { error: `Add a wallet named ${parsed.walletMatch.join(' or ')} before importing this alert.` });
   }
-  if (cbcWallets.length > 1) {
-    return json(409, { error: 'More than one CBC/China Bank wallet matches. Rename the intended wallet so only one matches.' });
+  if (matchingWallets.length > 1) {
+    return json(409, { error: 'More than one matching wallet was found. Rename the intended wallet so only one matches.' });
   }
 
   const smsFingerprint = await sha256(body.message.trim());
   const { error: insertError } = await admin.from('transactions').insert({
     user_id: tokenRow.user_id,
-    wallet_id: cbcWallets[0].id,
-    type: 'expense',
+    wallet_id: matchingWallets[0].id,
+    type: parsed.type,
     description: parsed.description,
-    category: 'Card purchase',
+    category: parsed.category,
     amount_cents: parsed.amountCents,
     occurred_on: parsed.occurredOn,
     sms_fingerprint: smsFingerprint,
@@ -129,11 +172,11 @@ Deno.serve(async (request) => {
 
   return json(201, {
     imported: true,
-    type: 'expense',
+    type: parsed.type,
     amount: parsed.amountCents / 100,
     currency: 'PHP',
     occurred_on: parsed.occurredOn,
-    wallet: cbcWallets[0].name,
-    message: 'CBC card expense imported.',
+    wallet: matchingWallets[0].name,
+    message: `SMS ${parsed.type} imported.`,
   });
 });

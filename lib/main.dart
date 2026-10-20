@@ -1380,7 +1380,7 @@ class _DashboardPageState extends State<DashboardPage> {
           ],
         ),
         const Text(
-          'Imports supported CBC card alerts into a CBC or China Bank wallet.',
+          'Imports clearly classified CBC or GCash alerts into the matching wallet.',
           style: TextStyle(color: _muted, fontSize: 12),
         ),
         const SizedBox(height: 18),

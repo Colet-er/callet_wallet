@@ -20,28 +20,56 @@ async function sha256(value: string): Promise<string> {
     .join('');
 }
 
-function parseSmsMessage(message: string) {
-  const card = message.match(
-    /Thank you for using\s+CBC\s+Card\s+ending in\s+(\d{4})\s*:/i,
-  );
-  const amount = message.match(/(?:\bPHP\s*|₱\s*)([\d,]+(?:\.\d{1,2})?)\b/i);
+type WalletRow = {
+  id: string;
+  name: string;
+  account_last4: string | null;
+  sms_alias: string | null;
+};
+
+function normalizeMatchText(value: string): string {
+  return ` ${value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
+}
+
+function walletTextMatches(wallet: WalletRow, text: string): boolean {
+  const haystack = normalizeMatchText(text);
+  const aliases = [wallet.name, ...(wallet.sms_alias ?? '').split(',')]
+    .map((value) => normalizeMatchText(value).trim())
+    .filter((value) => value.length > 1);
+  return aliases.some((alias) => haystack.includes(` ${alias} `));
+}
+
+function uniqueWallet(matches: WalletRow[]): WalletRow | null {
+  const unique = [...new Map(matches.map((wallet) => [wallet.id, wallet])).values()];
+  return unique.length === 1 ? unique[0] : null;
+}
+
+function walletsForLast4(wallets: WalletRow[], last4: string | undefined): WalletRow[] {
+  if (!last4) return [];
+  return wallets.filter((wallet) => wallet.account_last4 === last4);
+}
+
+function parseSmsMessage(message: string, wallets: WalletRow[]) {
+  const card = message.match(/\bcard ending in\s+(\d{4})\b/i);
+  const amount = message.match(/(?:\bPHP\s*|\bP\s*|₱\s*)([\d,]+(?:\.\d{1,2})?)\b/i);
   const date = message.match(
     /\b(\d{4})-(\d{1,2})-(\d{1,2})\b|\b(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})\b/,
   );
   const namedDate = message.match(
     /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i,
   );
-  const saysIncome = /\b(credited|credit(?:ed)? to|received|deposit(?:ed)?|cash[ -]?in|refund(?:ed)?)\b/i.test(message);
+  const saysIncome = /\b(credited|credit(?:ed)? to|received|deposit(?:ed)?|cash[ -]?in|refund(?:ed)?|top[ -]?up)\b/i.test(message);
+  const transfer = /\btransfer(?:red|s)?\b/i.test(message);
   const saysExpense =
-    /\b(debited|deducted|withdraw(?:n|al)?|purchase|paid|payment|sent|cash[ -]?out)\b/i.test(message) ||
-    (/\btransfer(?:red)?\b/i.test(message) && /\bfrom\b/i.test(message) && !saysIncome);
+    /\b(debited|deducted|withdraw(?:n|al)?|purchase|paid|payment|sent|cash[ -]?out|spent|charged)\b/i.test(message) ||
+    (transfer && !saysIncome);
 
   if (!amount) return { error: 'Could not find a PHP amount in this SMS.' };
   if (saysIncome === saysExpense && !card) {
     return { error: 'Could not tell whether this SMS is income or an expense.' };
   }
 
-  const type = card || saysExpense ? 'expense' : 'income';
+  const direction = card || saysExpense ? 'expense' : 'income';
   const majorAmount = Number(amount[1].replaceAll(',', ''));
   const amountCents = Math.round(majorAmount * 100);
   if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
@@ -78,21 +106,59 @@ function parseSmsMessage(message: string) {
     occurredOn = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
   }
 
-  const isCbc = /\b(?:CBC|China Bank|China Banking Corporation)\b/i.test(message);
-  const isGcash = /\bGCash\b/i.test(message);
-  if (Number(isCbc) + Number(isGcash) !== 1) {
-    return { error: 'Could not identify a single CBC or GCash wallet from this SMS.' };
+  const fromSegment = message.match(/\bfrom\b([\s\S]{0,70}?)(?:\bto\b|$)/i)?.[1] ?? '';
+  const toSegment = message.match(/\bto\b([\s\S]{0,70}?)(?:\bon\b|$)/i)?.[1] ?? '';
+  const fromLast4 = message.match(/\bfrom\b[\s\S]{0,50}?(?:\*{2,}|x{2,}|ending in\s*)(\d{4})\b/i)?.[1];
+  const toLast4 = message.match(/\bto\b[\s\S]{0,50}?(?:\*{2,}|x{2,}|ending in\s*)(\d{4})\b/i)?.[1];
+  const cardLast4 = card?.[1];
+  const sourceById = uniqueWallet(walletsForLast4(wallets, fromLast4 ?? cardLast4));
+  const destinationById = uniqueWallet(walletsForLast4(wallets, toLast4));
+  const sourceByText = uniqueWallet(wallets.filter((wallet) =>
+    walletTextMatches(wallet, fromSegment))) ??
+    uniqueWallet(wallets.filter((wallet) => walletTextMatches(wallet, message)));
+  const destinationByText = uniqueWallet(wallets.filter((wallet) =>
+    walletTextMatches(wallet, toSegment))) ??
+    uniqueWallet(wallets.filter((wallet) => walletTextMatches(wallet, message)));
+  const source = sourceById ?? sourceByText;
+  const destination = destinationById ?? destinationByText;
+
+  if (fromLast4 && walletsForLast4(wallets, fromLast4).length > 1) {
+    return { error: `More than one wallet uses account ending ${fromLast4}. Give each wallet a unique last four digits.` };
+  }
+  if (toLast4 && walletsForLast4(wallets, toLast4).length > 1) {
+    return { error: `More than one wallet uses account ending ${toLast4}. Give each wallet a unique last four digits.` };
   }
 
-  const brand = isCbc ? 'CBC' : 'GCash';
-  const cardDescription = card ? `CBC card ••••${card[1]}` : `${brand} SMS ${type}`;
+  let wallet: WalletRow | null = null;
+  let transferTo: WalletRow | null = null;
+  let type: 'income' | 'expense' | 'transfer' = direction;
+  if (transfer && source && destination && source.id !== destination.id) {
+    type = 'transfer';
+    wallet = source;
+    transferTo = destination;
+  } else if (direction === 'expense') {
+    wallet = source ?? uniqueWallet(wallets.filter((candidate) => walletTextMatches(candidate, message)));
+  } else {
+    wallet = destination ?? uniqueWallet(wallets.filter((candidate) => walletTextMatches(candidate, message)));
+  }
+  if (!wallet) {
+    return { error: 'Could not match this SMS to one wallet. Add its account last four digits or SMS match words to that wallet.' };
+  }
+
+  const description = type === 'transfer'
+    ? `Transfer to ${transferTo!.name}`
+    : card
+      ? `${wallet.name} card ••••${card[1]}`
+      : `${wallet.name} SMS ${type}`;
   return {
     type,
     amountCents,
     occurredOn,
-    description: cardDescription,
-    category: card ? 'Card purchase' : type === 'income' ? 'Income' : 'Expense',
-    walletMatch: isCbc ? ['cbc', 'china bank'] : ['gcash'],
+    description,
+    category: type === 'transfer' ? 'Transfer' : card ? 'Card purchase' : type === 'income' ? 'Income' : 'Expense',
+    walletId: wallet.id,
+    transferToWalletId: transferTo?.id ?? null,
+    walletName: wallet.name,
   };
 }
 
@@ -115,11 +181,6 @@ Deno.serve(async (request) => {
     return json(400, { error: 'Include the SMS text in a message field (maximum 1500 characters).' });
   }
 
-  const parsed = parseSmsMessage(body.message);
-  if ('error' in parsed) {
-    return json(422, { error: parsed.error });
-  }
-
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
   if (!supabaseUrl || !serviceKey) return json(500, { error: 'SMS import is not configured.' });
@@ -138,25 +199,20 @@ Deno.serve(async (request) => {
 
   const { data: walletRows, error: walletError } = await admin
     .from('wallets')
-    .select('id, name')
+    .select('id, name, account_last4, sms_alias')
     .eq('user_id', tokenRow.user_id);
   if (walletError) return json(500, { error: 'Could not find your wallets.' });
 
-  const matchingWallets = (walletRows ?? []).filter((wallet) => {
-    const name = String(wallet.name).toLowerCase();
-    return parsed.walletMatch.some((match) => name.includes(match));
-  });
-  if (matchingWallets.length === 0) {
-    return json(409, { error: `Add a wallet named ${parsed.walletMatch.join(' or ')} before importing this alert.` });
-  }
-  if (matchingWallets.length > 1) {
-    return json(409, { error: 'More than one matching wallet was found. Rename the intended wallet so only one matches.' });
+  const parsed = parseSmsMessage(body.message, (walletRows ?? []) as WalletRow[]);
+  if ('error' in parsed) {
+    return json(422, { error: parsed.error });
   }
 
   const smsFingerprint = await sha256(body.message.trim());
   const { error: insertError } = await admin.from('transactions').insert({
     user_id: tokenRow.user_id,
-    wallet_id: matchingWallets[0].id,
+    wallet_id: parsed.walletId,
+    transfer_to_wallet_id: parsed.transferToWalletId,
     type: parsed.type,
     description: parsed.description,
     category: parsed.category,
@@ -176,7 +232,8 @@ Deno.serve(async (request) => {
     amount: parsed.amountCents / 100,
     currency: 'PHP',
     occurred_on: parsed.occurredOn,
-    wallet: matchingWallets[0].name,
+    wallet: parsed.walletName,
+    destination_wallet: parsed.transferToWalletId ? parsed.description.replace(/^Transfer to /, '') : null,
     message: `SMS ${parsed.type} imported.`,
   });
 });

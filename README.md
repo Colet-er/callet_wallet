@@ -19,7 +19,10 @@ transactions, and loans.
    Supabase SQL editor. This adds loan repayment terms and weekly expense limits.
 5. Run `supabase/migrations/202610200003_add_sms_import.sql` in the Supabase SQL
    editor. This adds revocable Shortcut tokens and duplicate protection for SMS imports.
-6. Link the Supabase CLI to your project, then deploy the SMS import function:
+6. Run `supabase/migrations/202610200004_add_sms_wallet_matching_and_transfers.sql`
+   in the Supabase SQL editor. This adds per-wallet SMS matching details and
+   support for internal wallet transfers.
+7. Link the Supabase CLI to your project, then deploy the SMS import function:
 
    ```sh
    supabase link --project-ref YOUR_PROJECT_REF
@@ -28,8 +31,8 @@ transactions, and loans.
 
    Supabase supplies the function's server-side service role key. Keep it out of
    the Shortcut and out of the Flutter app.
-7. Enable email/password authentication in Supabase Auth.
-8. Install the Flutter SDK and fetch dependencies:
+8. Enable email/password authentication in Supabase Auth.
+9. Install the Flutter SDK and fetch dependencies:
 
    ```sh
    flutter pub get
@@ -136,9 +139,12 @@ AI service.
 
 ## iPhone bank SMS import
 
-On the Wallets section, select **Connect SMS Shortcut** and copy the one-time
-token. Add a wallet named `CBC` or `China Bank`; CBC card alerts are assigned to
-that wallet. The token can be rotated by creating another one or revoked from
+On the Wallets section, select **Connect SMS Shortcut** and copy the token.
+Tap the SMS icon on each wallet card to set that wallet's account/card last four
+digits and optional SMS match words. Do not enter a full account number. For
+example, a CBC wallet can use last four `4138` and match words `My CBC`; a
+destination wallet can use last four `0890` or the phrase shown for that account
+in the alert. The token can be rotated by creating another one or revoked from
 the same screen.
 
 In the iPhone Shortcut automation, add **Get Contents of URL** after the
@@ -151,8 +157,8 @@ message trigger:
 - Request body: JSON with `message` set to the SMS text variable from the
   automation trigger
 
-The importer classifies messages with clear income terms (such as credited,
-received, or deposit) or expense terms (such as debited, purchase, withdrawn,
-or sent). It recognizes CBC or GCash when named in the SMS, skips ambiguous
-messages and duplicate copies, and adds supported imports to Activity. Bank
-messages that use other wording may need their parser expanded.
+The importer matches SMS text against each wallet's name, configured match
+words, and account/card last four digits. It classifies clear income or expense
+wording and records an internal transfer when both the source and destination
+wallets match. Ambiguous or unmatched messages are rejected instead of changing
+a guessed wallet balance; duplicate copies are skipped.

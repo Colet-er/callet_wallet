@@ -511,6 +511,7 @@ class LedgerTransaction {
     required this.walletId,
     required this.amountCents,
     required this.type,
+    this.transferToWalletId,
     required this.description,
     required this.category,
     required this.occurredOn,
@@ -520,6 +521,7 @@ class LedgerTransaction {
   final String walletId;
   final int amountCents;
   final String type;
+  final String? transferToWalletId;
   final String description;
   final String category;
   final DateTime occurredOn;
@@ -530,6 +532,7 @@ class LedgerTransaction {
         walletId: row['wallet_id'] as String,
         amountCents: (row['amount_cents'] as num).toInt(),
         type: row['type'] as String,
+        transferToWalletId: row['transfer_to_wallet_id'] as String?,
         description: row['description'] as String,
         category: row['category'] as String,
         occurredOn: DateTime.parse(row['occurred_on'] as String),
@@ -543,6 +546,8 @@ class MoneyWallet {
     required this.type,
     required this.openingBalanceCents,
     required this.openingBalanceOn,
+    this.accountLast4,
+    this.smsAlias = '',
   });
 
   final String id;
@@ -550,6 +555,8 @@ class MoneyWallet {
   final String type;
   final int openingBalanceCents;
   final DateTime openingBalanceOn;
+  final String? accountLast4;
+  final String smsAlias;
 
   factory MoneyWallet.fromMap(Map<String, dynamic> row) => MoneyWallet(
         id: row['id'] as String,
@@ -557,6 +564,8 @@ class MoneyWallet {
         type: row['type'] as String,
         openingBalanceCents: (row['opening_balance_cents'] as num).toInt(),
         openingBalanceOn: DateTime.parse(row['opening_balance_on'] as String),
+        accountLast4: row['account_last4'] as String?,
+        smsAlias: row['sms_alias'] as String? ?? '',
       );
 
   IconData get icon => switch (type) {
@@ -575,13 +584,16 @@ class MoneyWallet {
 
   int balanceFor(List<LedgerTransaction> transactions) => transactions
       .where((item) =>
-          item.walletId == id && !item.occurredOn.isBefore(openingBalanceOn))
-      .fold<int>(
-        openingBalanceCents,
-        (balance, item) =>
-            balance +
-            (item.type == 'income' ? item.amountCents : -item.amountCents),
-      );
+          !item.occurredOn.isBefore(openingBalanceOn) &&
+          (item.walletId == id ||
+              (item.type == 'transfer' && item.transferToWalletId == id)))
+      .fold<int>(openingBalanceCents, (balance, item) {
+    if (item.type == 'income' ||
+        (item.type == 'transfer' && item.transferToWalletId == id)) {
+      return balance + item.amountCents;
+    }
+    return balance - item.amountCents;
+  });
 }
 
 class PersonalLoan {
@@ -630,7 +642,8 @@ class DashboardPage extends StatefulWidget {
   State<DashboardPage> createState() => _DashboardPageState();
 }
 
-class _DashboardPageState extends State<DashboardPage> {
+class _DashboardPageState extends State<DashboardPage>
+    with WidgetsBindingObserver {
   List<LedgerTransaction> _transactions = [];
   List<MoneyWallet> _wallets = [];
   List<PersonalLoan> _loans = [];
@@ -644,7 +657,19 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadData();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && !_loading) _loadData();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
 
   Future<void> _loadData() async {
@@ -655,7 +680,7 @@ class _DashboardPageState extends State<DashboardPage> {
     try {
       var walletRows = await _client
           .from('wallets')
-          .select('id, name, type, opening_balance_cents, opening_balance_on')
+          .select('id, name, type, opening_balance_cents, opening_balance_on, account_last4, sms_alias')
           .order('created_at');
       if (walletRows.isEmpty) {
         await _client.from('wallets').insert({
@@ -667,13 +692,13 @@ class _DashboardPageState extends State<DashboardPage> {
         });
         walletRows = await _client
             .from('wallets')
-            .select('id, name, type, opening_balance_cents, opening_balance_on')
+            .select('id, name, type, opening_balance_cents, opening_balance_on, account_last4, sms_alias')
             .order('created_at');
       }
       final rows = await _client
           .from('transactions')
           .select(
-              'id, wallet_id, amount_cents, type, description, category, occurred_on')
+              'id, wallet_id, transfer_to_wallet_id, amount_cents, type, description, category, occurred_on')
           .order('occurred_on', ascending: false)
           .order('created_at', ascending: false);
       final loanRows = await _client
@@ -789,6 +814,18 @@ class _DashboardPageState extends State<DashboardPage> {
       backgroundColor: _canvas,
       constraints: const BoxConstraints(maxWidth: 560),
       builder: (_) => const AddWalletSheet(),
+    );
+    if (saved == true) await _loadData();
+  }
+
+  Future<void> _configureWalletSms(MoneyWallet wallet) async {
+    final saved = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: _canvas,
+      constraints: const BoxConstraints(maxWidth: 560),
+      builder: (_) => WalletSmsMatchingSheet(wallet: wallet),
     );
     if (saved == true) await _loadData();
   }
@@ -1380,7 +1417,7 @@ class _DashboardPageState extends State<DashboardPage> {
           ],
         ),
         const Text(
-          'Imports clearly classified CBC or GCash alerts into the matching wallet.',
+          'Set each wallet’s SMS match details so incoming alerts can be assigned to the right wallet.',
           style: TextStyle(color: _muted, fontSize: 12),
         ),
         const SizedBox(height: 18),
@@ -1392,7 +1429,11 @@ class _DashboardPageState extends State<DashboardPage> {
         else if (_error != null)
           _ErrorCard(message: _error!, onRetry: _loadData)
         else
-          _WalletCards(wallets: _wallets, transactions: _transactions),
+          _WalletCards(
+            wallets: _wallets,
+            transactions: _transactions,
+            onConfigure: _configureWalletSms,
+          ),
       ];
 
   List<Widget> _activitySection() => [
@@ -1465,6 +1506,9 @@ class _DashboardPageState extends State<DashboardPage> {
         .map((transaction) => _TransactionTile(
               transaction,
               walletName: _walletNameFor(transaction.walletId),
+              destinationWalletName: transaction.transferToWalletId == null
+                  ? null
+                  : _walletNameFor(transaction.transferToWalletId!),
               onDelete: limit == null
                   ? () => _deleteTransaction(transaction)
                   : null,
@@ -1505,11 +1549,13 @@ class _WalletCards extends StatelessWidget {
     required this.wallets,
     required this.transactions,
     this.compact = false,
+    this.onConfigure,
   });
 
   final List<MoneyWallet> wallets;
   final List<LedgerTransaction> transactions;
   final bool compact;
+  final ValueChanged<MoneyWallet>? onConfigure;
 
   @override
   Widget build(BuildContext context) {
@@ -1533,6 +1579,9 @@ class _WalletCards extends StatelessWidget {
                   child: _WalletCard(
                     wallet: wallet,
                     balance: wallet.balanceFor(transactions),
+                    onConfigure: onConfigure == null
+                        ? null
+                        : () => onConfigure!(wallet),
                   ),
                 ))
             .toList(),
@@ -1542,10 +1591,15 @@ class _WalletCards extends StatelessWidget {
 }
 
 class _WalletCard extends StatelessWidget {
-  const _WalletCard({required this.wallet, required this.balance});
+  const _WalletCard({
+    required this.wallet,
+    required this.balance,
+    this.onConfigure,
+  });
 
   final MoneyWallet wallet;
   final int balance;
+  final VoidCallback? onConfigure;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -1570,6 +1624,16 @@ class _WalletCard extends StatelessWidget {
                 child: Icon(wallet.icon, color: _emerald, size: 20),
               ),
               const Spacer(),
+              if (onConfigure != null)
+                IconButton(
+                  tooltip: 'Configure SMS matching',
+                  visualDensity: VisualDensity.compact,
+                  constraints: const BoxConstraints.tightFor(width: 34, height: 34),
+                  padding: EdgeInsets.zero,
+                  onPressed: onConfigure,
+                  icon: const Icon(Icons.sms_outlined, size: 17),
+                  color: _emerald,
+                ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
                 decoration: BoxDecoration(
@@ -1643,7 +1707,7 @@ class _CashFlowChart extends StatelessWidget {
             transaction.occurredOn.month == month.month) {
           if (transaction.type == 'income') {
             income += transaction.amountCents;
-          } else {
+          } else if (transaction.type == 'expense') {
             expenses += transaction.amountCents;
           }
         }
@@ -1904,16 +1968,23 @@ class _SummaryCard extends StatelessWidget {
 }
 
 class _TransactionTile extends StatelessWidget {
-  const _TransactionTile(this.transaction, {this.walletName, this.onDelete});
+  const _TransactionTile(this.transaction,
+      {this.walletName, this.destinationWalletName, this.onDelete});
 
   final LedgerTransaction transaction;
   final String? walletName;
+  final String? destinationWalletName;
   final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
     final isIncome = transaction.type == 'income';
-    final color = isIncome ? _emerald : _expense;
+    final isTransfer = transaction.type == 'transfer';
+    final color = isIncome
+        ? _emerald
+        : isTransfer
+            ? const Color(0xFF8CC8FF)
+            : _expense;
     return Container(
       margin: const EdgeInsets.only(bottom: 9),
       padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 13),
@@ -1932,7 +2003,11 @@ class _TransactionTile extends StatelessWidget {
               borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(
-              isIncome ? Icons.south_west_rounded : Icons.north_east_rounded,
+              isTransfer
+                  ? Icons.swap_horiz_rounded
+                  : isIncome
+                      ? Icons.south_west_rounded
+                      : Icons.north_east_rounded,
               color: color,
               size: 20,
             ),
@@ -1953,7 +2028,7 @@ class _TransactionTile extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${transaction.category} · ${_shortDate.format(transaction.occurredOn)}${walletName == null ? '' : ' · $walletName'}',
+                  '${transaction.category} · ${_shortDate.format(transaction.occurredOn)}${walletName == null ? '' : ' · $walletName'}${destinationWalletName == null ? '' : ' → $destinationWalletName'}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: _muted, fontSize: 11),
@@ -1967,7 +2042,7 @@ class _TransactionTile extends StatelessWidget {
               fit: BoxFit.scaleDown,
               alignment: Alignment.centerRight,
               child: Text(
-                '${isIncome ? '+' : '−'}${_php.format(transaction.amountCents / 100)}',
+                '${isTransfer ? '↔ ' : isIncome ? '+' : '−'}${_php.format(transaction.amountCents / 100)}',
                 style: TextStyle(color: color, fontWeight: FontWeight.w700),
               ),
             ),
@@ -2696,10 +2771,15 @@ class _ChatAssistantSheetState extends State<ChatAssistantSheet> {
     final lines = transactions.map((transaction) {
       final wallet = _walletForTransaction(transaction.walletId);
       final walletLabel = wallet == null ? '' : ' · ${wallet.name}';
-      final kind = transaction.type == 'income' ? 'Income' : 'Expense';
+      final kind = switch (transaction.type) {
+        'income' => 'Income',
+        'transfer' => 'Transfer',
+        _ => 'Expense',
+      };
       return '- ${DateFormat('MMM d, yyyy').format(transaction.occurredOn)} · '
           '$kind · ${transaction.description} · ${transaction.category} · '
-          '${_php.format(transaction.amountCents / 100)}$walletLabel';
+          '${_php.format(transaction.amountCents / 100)}$walletLabel'
+          '${transaction.transferToWalletId == null ? '' : ' → ${_walletForTransaction(transaction.transferToWalletId!)?.name ?? 'destination wallet'}'}';
     });
     return 'Saved activity:\n${lines.join('\n')}';
   }
@@ -2796,7 +2876,10 @@ class _ChatAssistantSheetState extends State<ChatAssistantSheet> {
   }) {
     final balance = _php.format(wallet.balanceFor(widget.transactions) / 100);
     final activity = widget.transactions
-        .where((transaction) => transaction.walletId == wallet.id)
+        .where((transaction) =>
+            transaction.walletId == wallet.id ||
+            (transaction.type == 'transfer' &&
+                transaction.transferToWalletId == wallet.id))
         .toList()
       ..sort((a, b) => b.occurredOn.compareTo(a.occurredOn));
     if (activity.isEmpty) {
@@ -2805,7 +2888,13 @@ class _ChatAssistantSheetState extends State<ChatAssistantSheet> {
 
     final shownActivity = includeAllActivity ? activity : activity.take(5);
     final descriptions = shownActivity.map((transaction) {
-      final kind = transaction.type == 'income' ? 'Income' : 'Expense';
+      final kind = switch (transaction.type) {
+        'income' => 'Income',
+        'transfer' => transaction.transferToWalletId == wallet.id
+            ? 'Transfer in'
+            : 'Transfer out',
+        _ => 'Expense',
+      };
       final category = transaction.category.isEmpty
           ? ''
           : ' · ${transaction.category}';
@@ -3049,6 +3138,106 @@ class _AddWalletSheetState extends State<AddWalletSheet> {
       );
 }
 
+class WalletSmsMatchingSheet extends StatefulWidget {
+  const WalletSmsMatchingSheet({required this.wallet, super.key});
+
+  final MoneyWallet wallet;
+
+  @override
+  State<WalletSmsMatchingSheet> createState() =>
+      _WalletSmsMatchingSheetState();
+}
+
+class _WalletSmsMatchingSheetState extends State<WalletSmsMatchingSheet> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _last4;
+  late final TextEditingController _aliases;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _last4 = TextEditingController(text: widget.wallet.accountLast4 ?? '');
+    _aliases = TextEditingController(text: widget.wallet.smsAlias);
+  }
+
+  @override
+  void dispose() {
+    _last4.dispose();
+    _aliases.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _busy = true);
+    try {
+      await Supabase.instance.client.from('wallets').update({
+        'account_last4': _last4.text.trim().isEmpty ? null : _last4.text.trim(),
+        'sms_alias': _aliases.text.trim(),
+      }).eq('id', widget.wallet.id);
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (error) {
+      if (mounted) _showMessage(context, 'Could not save SMS matching: $error');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: EdgeInsets.fromLTRB(
+            20, 20, 20, MediaQuery.viewInsetsOf(context).bottom + 20),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('SMS matching · ${widget.wallet.name}',
+                  style: const TextStyle(
+                      color: _ink, fontSize: 20, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 8),
+              const Text(
+                  'Only enter the last four digits. Never enter a full account number.',
+                  style: TextStyle(color: _muted)),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _last4,
+                keyboardType: TextInputType.number,
+                maxLength: 4,
+                decoration: const InputDecoration(
+                  labelText: 'Account or card last four digits',
+                  hintText: 'e.g. 4138',
+                ),
+                validator: (value) {
+                  final text = value?.trim() ?? '';
+                  return text.isEmpty || RegExp(r'^\d{4}$').hasMatch(text)
+                      ? null
+                      : 'Enter exactly four digits or leave blank.';
+                },
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _aliases,
+                maxLength: 160,
+                decoration: const InputDecoration(
+                  labelText: 'SMS match words (optional)',
+                  hintText: 'e.g. My CBC, China Bank',
+                  helperText: 'Separate multiple phrases with commas.',
+                ),
+              ),
+              const SizedBox(height: 14),
+              PrimaryButton(
+                  label: 'Save matching details',
+                  busy: _busy,
+                  onPressed: _save),
+            ],
+          ),
+        ),
+      );
+}
+
 class AddTransactionSheet extends StatefulWidget {
   const AddTransactionSheet({required this.wallets, super.key});
 
@@ -3077,6 +3266,7 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
   String _type = 'expense';
   String _category = 'General';
   String? _walletId;
+  String? _transferToWalletId;
   DateTime _date = DateTime.now();
   bool _busy = false;
 
@@ -3095,6 +3285,7 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
       await Supabase.instance.client.from('transactions').insert({
         'user_id': Supabase.instance.client.auth.currentUser!.id,
         'wallet_id': _walletId ?? widget.wallets.first.id,
+        'transfer_to_wallet_id': _type == 'transfer' ? _transferToWalletId : null,
         'amount_cents': amountCents,
         'type': _type,
         'description': _description.text.trim(),
@@ -3165,6 +3356,11 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                       label: Text('Income'),
                       icon: Icon(Icons.south_west_rounded),
                     ),
+                    ButtonSegment(
+                      value: 'transfer',
+                      label: Text('Transfer'),
+                      icon: Icon(Icons.swap_horiz_rounded),
+                    ),
                   ],
                   selected: {_type},
                   onSelectionChanged: (value) =>
@@ -3215,8 +3411,29 @@ class _AddTransactionSheetState extends State<AddTransactionSheet> {
                             child: Text('${wallet.name} · ${wallet.typeLabel}'),
                           ))
                       .toList(),
-                  onChanged: (value) => setState(() => _walletId = value),
+                  onChanged: (value) => setState(() {
+                    _walletId = value;
+                    if (_transferToWalletId == value) _transferToWalletId = null;
+                  }),
                 ),
+                if (_type == 'transfer') ...[
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    value: _transferToWalletId,
+                    decoration: const InputDecoration(labelText: 'To wallet'),
+                    items: widget.wallets
+                        .where((wallet) => wallet.id != (_walletId ?? widget.wallets.first.id))
+                        .map((wallet) => DropdownMenuItem(
+                              value: wallet.id,
+                              child: Text('${wallet.name} · ${wallet.typeLabel}'),
+                            ))
+                        .toList(),
+                    validator: (value) => _type == 'transfer' && value == null
+                        ? 'Choose a different destination wallet.'
+                        : null,
+                    onChanged: (value) => setState(() => _transferToWalletId = value),
+                  ),
+                ],
                 const SizedBox(height: 14),
                 DropdownButtonFormField<String>(
                   value: _category,
